@@ -1,0 +1,32 @@
+# Big data / corpora / outputs
+speechcorpus2020/
+DementiaBank/
+datasets/
+datasets_movies/
+datasets_movies_v2/
+processeddata/
+models/
+transcripts/
+annotations/
+annotations_movies/
+labelstudio_data/
+labelstudio_projects/
+
+# Caches / envs
+hf/
+hf_cache/
+tmp_cuda/
+myenv/
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+slurm-*.out
+slurm-*.err
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+opensmile/
+pipeline/archive/
