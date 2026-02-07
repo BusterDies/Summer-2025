@@ -1,88 +1,101 @@
 #!/usr/bin/env python3
+"""
+extract_faces_insightface.py
+
+Runs InsightFace on a video and outputs:
+  - <prefix>_faces.csv : detections per frame (multi-face)
+  - <prefix>_faces_emb.npy : 512-d embeddings per detection (same row order as csv)
+
+CSV columns:
+  frame_idx,time_sec,x1,y1,x2,y2,det_score
+
+Prints:
+  FACES_CSV_PATH:<path>
+  FACES_EMB_PATH:<path>
+"""
+
+from __future__ import annotations
+
 import argparse
-import csv
 from pathlib import Path
 
 import cv2
 import numpy as np
+import pandas as pd
+
 from insightface.app import FaceAnalysis
 
 
-def extract_faces(video_path: str, out_dir: str, det_size: int = 640, every_n: int = 1, ctx_id: int = 0):
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--video", type=Path, required=True, help="Path to input video (mp4 recommended)")
+    p.add_argument("--out", type=Path, required=True, help="Output directory")
+    p.add_argument("--prefix", type=str, required=True, help="Prefix for output files")
+    p.add_argument("--ctx-id", type=int, default=0, help="InsightFace ctx_id: 0=GPU, -1=CPU")
+    p.add_argument("--det-size", type=int, nargs=2, default=(640, 640), help="Detector size, e.g. 640 640")
+    args = p.parse_args()
 
-    # --- init InsightFace ---
+    args.out.mkdir(parents=True, exist_ok=True)
+
+    faces_csv = args.out / f"{args.prefix}_faces.csv"
+    faces_emb = args.out / f"{args.prefix}_faces_emb.npy"
+
     app = FaceAnalysis(name="buffalo_l")
-    app.prepare(ctx_id=ctx_id, det_size=(det_size, det_size))
+    app.prepare(ctx_id=args.ctx_id, det_size=tuple(args.det_size))
 
-    cap = cv2.VideoCapture(str(video_path))
+    cap = cv2.VideoCapture(str(args.video))
     if not cap.isOpened():
-        raise RuntimeError(f"Could not open video: {video_path}")
+        raise SystemExit(f"Could not open video: {args.video}")
 
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-
-    csv_path = out_dir / "faces.csv"
-    emb_path = out_dir / "faces_emb.npy"
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if not fps or fps <= 0:
+        fps = 30.0  # fallback
 
     rows = []
     embs = []
 
     frame_idx = -1
     while True:
-        ok, frame = cap.read()
+        ok, frame_bgr = cap.read()
         if not ok:
             break
         frame_idx += 1
 
-        if every_n > 1 and (frame_idx % every_n != 0):
-            continue
-
-        t_sec = frame_idx / fps
-        faces = app.get(frame)
+        time_sec = frame_idx / fps
+        faces = app.get(frame_bgr)
 
         for f in faces:
+            # bbox: [x1,y1,x2,y2]
             x1, y1, x2, y2 = f.bbox.astype(int).tolist()
-            score = float(f.det_score)
-
+            score = float(getattr(f, "det_score", 0.0))
+            rows.append(
+                {
+                    "frame_idx": frame_idx,
+                    "time_sec": float(time_sec),
+                    "x1": x1,
+                    "y1": y1,
+                    "x2": x2,
+                    "y2": y2,
+                    "det_score": score,
+                }
+            )
+            # embedding is always present for FaceAnalysis; ensure float32
             emb = np.asarray(f.embedding, dtype=np.float32)
             embs.append(emb)
 
-            rows.append({
-                "frame_idx":frame_idx,
-                "time_sec": f"{t_sec:.6f}",
-                "x1": x1, "y1": y1, "x2": x2, "y2": y2,
-                "det_score": f"{score:.6f}",
-            })
-
     cap.release()
 
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["frame_idx", "time_sec", "x1", "y1", "x2", "y2", "det_score"])
-        writer.writeheader()
-        writer.writerows(rows)
+    if not rows:
+        raise SystemExit("No faces detected. Nothing written.")
 
+    df = pd.DataFrame(rows)
+    df.to_csv(faces_csv, index=False)
 
+    emb_arr = np.vstack(embs).astype(np.float32)
+    np.save(faces_emb, emb_arr)
 
-        if embs:
-            np.save(emb_path, np.stack(embs, axis=0))
-        else:
-            np.save(emb_path, np.zeros((0,512), dtype=np.float32))
-        
-        print(f"Saved {len(rows)} detections -> {csv_path}")
-        print(f"Saved embeddings -> {emb_path}")
-
-
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--video", required=True)
-    p.add_argument("--out", required=True)
-    p.add_argument("--det-size",type=int, default=640)
-    p.add_argument("--every-n", type=int, default=1)
-    p.add_argument("--ctx-id",type=int, default=0, help="0=GPU, -1=CPU")
-    args = p.parse_args()
-
-    extract_faces(args.video, args.out, args.det_size, args.every_n, args.ctx_id)
+    print(f"FACES_CSV_PATH:{faces_csv}")
+    print(f"FACES_EMB_PATH:{faces_emb}")
 
 
 if __name__ == "__main__":
