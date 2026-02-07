@@ -30,3 +30,5 @@ slurm-*.err
 .idea/
 opensmile/
 pipeline/archive/
+diarization_out/
+ByteTrack/
